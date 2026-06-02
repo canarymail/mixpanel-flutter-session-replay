@@ -12,7 +12,7 @@ enum MaskContext {
   /// Inside MixpanelMask — all descendants are masked individually.
   mask,
 
-  /// Inside MixpanelUnmask — auto-masking is suppressed (except TextField).
+  /// Inside MixpanelUnmask — auto-masking is suppressed.
   unmask,
 }
 
@@ -180,15 +180,7 @@ class MaskDetector {
     // --- Masking decision ---
     MaskContext currentContext = maskContext;
 
-    // SECURITY: TextField is always masked regardless of context or directives
-    if (element.renderObject is RenderEditable) {
-      _addElementToMaskRects(
-        element,
-        boundary,
-        maskRegions,
-        MaskSource.security,
-      );
-    } else if (widget is MixpanelMask) {
+    if (widget is MixpanelMask) {
       // Container rect covers MixpanelMask's own bounds
       _addElementToMaskRects(element, boundary, maskRegions, MaskSource.manual);
       // Propagate context=mask to all descendants
