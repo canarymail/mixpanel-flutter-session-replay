@@ -110,8 +110,7 @@ class ScreenshotCapturer {
       try {
         compressedBytes = await _compressImage(maskedImage);
       } catch (e) {
-        rawImage.dispose();
-        maskedImage.dispose();
+        maskedImage.dispose(); // rawImage == maskedImage, dispose once
         return CaptureFailure(
           CaptureError.compressionFailed,
           'Image compression failed: $e',
