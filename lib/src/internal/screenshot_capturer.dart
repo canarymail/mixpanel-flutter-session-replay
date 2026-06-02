@@ -79,54 +79,15 @@ class ScreenshotCapturer {
   }) async {
     final captureStart = clock.now();
     try {
-      // Create mask detector with specified mask types or use default directive
-      final maskDetector = MaskDetector(
-        directive: maskTypes != null
-            ? MaskingDirective(autoMaskTypes: maskTypes)
-            : directive,
-        trackUnmaskBounds: _debugOverlayEnabled,
-      );
+      // Masking disabled — skip widget tree traversal and image manipulation
+      // for maximum capture performance.
+      const maskRegions = <MaskRegionInfo>[];
 
-      // Using endOfFrame ensures both detectMaskRegions() and toImage() see the same painted state
       await SchedulerBinding.instance.endOfFrame;
 
-      // Detect masks after paint is complete
-      final maskDetectionStart = clock.now();
-      MaskDetectionResult maskResult;
-      try {
-        maskResult = maskDetector.detectMaskRegions(boundary);
-      } catch (e) {
-        return CaptureFailure(
-          CaptureError.maskDetectionFailed,
-          'Failed to detect mask regions: $e',
-        );
-      }
-      final maskRegions = maskResult.maskRegions;
-      final maskDetectionTime = clock.now().difference(maskDetectionStart);
-      _logger.debug(
-        'Mask detection: ${maskDetectionTime.inMilliseconds}ms (found ${maskRegions.length} masks)',
-      );
-
-      // Skip capture when visual state would cause mask coordinate mismatch
-      // (route transitions show overlapping unmasked content, overscroll stretch
-      // shifts content via paint-only transform not reflected in getTransformTo)
-      if (maskResult.shouldSkipCapture) {
-        _logger.debug(
-          'Skipping capture: visual state would cause mask mismatch',
-        );
-        return CaptureFailure(
-          CaptureError.maskDetectionFailed,
-          'Visual state would cause mask coordinate mismatch',
-        );
-      }
-
-      // IMMEDIATELY capture image but don't await yet - this ensures both operations now see the same painted state
-      // Because Dart is single-threaded, no other code can execute between mask detection
-      // and toImage() call, ensuring they see identical frame state
       final captureTimestamp = clock.now();
       final imageFuture = boundary.toImage(pixelRatio: 1.0);
 
-      // Wait for image rendering to complete
       ui.Image rawImage;
       try {
         rawImage = await imageFuture;
@@ -141,20 +102,7 @@ class ScreenshotCapturer {
         'Image rendering: ${renderTime.inMilliseconds}ms (${rawImage.width}x${rawImage.height})',
       );
 
-      // Apply masks
-      final maskPaintStart = clock.now();
-      ui.Image maskedImage;
-      try {
-        maskedImage = await _maskPainter.applyMasks(rawImage, maskRegions);
-      } catch (e) {
-        rawImage.dispose();
-        return CaptureFailure(
-          CaptureError.maskApplicationFailed,
-          'Failed to apply mask overlays: $e',
-        );
-      }
-      final maskPaintTime = clock.now().difference(maskPaintStart);
-      _logger.debug('Mask painting: ${maskPaintTime.inMilliseconds}ms');
+      final ui.Image maskedImage = rawImage;
 
       // Compress image
       final compressionStart = clock.now();
@@ -180,8 +128,7 @@ class ScreenshotCapturer {
       final imageHeight = maskedImage.height;
       final imageMaskCount = maskRegions.length;
 
-      // Clean up
-      rawImage.dispose();
+      // Clean up (maskedImage == rawImage when masking is disabled, dispose once)
       maskedImage.dispose();
 
       if (compressedBytes == null) {
