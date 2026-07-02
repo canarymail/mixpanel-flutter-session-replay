@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:clock/clock.dart';
 
@@ -33,7 +34,14 @@ class SerializedPayload {
 class PayloadSerializer {
   final String _token;
 
-  PayloadSerializer(this._token);
+  /// When true (production default), JSON-encoding + gzip runs on a background
+  /// isolate so it never blocks the caller (the root/UI isolate). Tests that
+  /// drive the flush timer under `fakeAsync` set this false: a real isolate
+  /// can't be advanced by fake time, so they run the codec inline instead.
+  final bool _compressInIsolate;
+
+  PayloadSerializer(this._token, {bool compressInIsolate = true})
+      : _compressInIsolate = compressInIsolate;
 
   Future<SerializedPayload> serialize(
     List<SessionReplayEvent> events,
@@ -61,11 +69,18 @@ class PayloadSerializer {
       events.map((e) => RRWebEvent.fromSessionReplayEvent(e).toJson()).toList(),
     );
 
-    // Create JSON string
-    final jsonString = jsonEncode(result);
-
-    // GZIP compress the payload
-    final compressed = await _gzipCompress(jsonString);
+    // JSON-encode and GZIP-compress off the caller's isolate.
+    //
+    // jsonEncode over base64-encoded screenshot frames plus gzip.encode is
+    // ~100ms of synchronous CPU per flush. Running it on the caller (the
+    // root/UI isolate) janks the app every flushInterval, visible as a stutter
+    // on any interaction that coincides with a flush. `result` is plain
+    // List<Map<String, dynamic>> (strings/nums/lists/maps), so it copies to the
+    // worker isolate cleanly. The batch is already dequeued and awaited by the
+    // caller, so sequence ordering is unaffected.
+    final compressed = _compressInIsolate
+        ? await Isolate.run(() => gzip.encode(utf8.encode(jsonEncode(result))))
+        : gzip.encode(utf8.encode(jsonEncode(result)));
 
     return SerializedPayload(
       body: compressed,

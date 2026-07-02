@@ -31,7 +31,10 @@ void main() {
     setUp(() async {
       eventQueue = InMemoryEventQueue();
       await eventQueue.initialize();
-      serializer = PayloadSerializer(testToken);
+      // Run the codec inline: several tests drive the flush timer under
+      // fakeAsync, which can't advance the real isolate the production path
+      // uses. Output bytes are identical either way.
+      serializer = PayloadSerializer(testToken, compressInIsolate: false);
       logger = MixpanelLogger(LogLevel.none);
     });
 
