@@ -111,7 +111,7 @@ class ScreenshotCapturer {
       if (rawImage.width == 0 || rawImage.height == 0) {
         rawImage.dispose();
         return const CaptureFailure(
-          CaptureError.renderBoundaryNotFound,
+          CaptureError.emptySnapshot,
           'Raster snapshot produced an empty image',
         );
       }
