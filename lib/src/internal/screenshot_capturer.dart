@@ -102,6 +102,20 @@ class ScreenshotCapturer {
         'Image rendering: ${renderTime.inMilliseconds}ms (${rawImage.width}x${rawImage.height})',
       );
 
+      // A 0x0 image means the engine's raster snapshot failed, e.g. the GL
+      // context could not be made current while the surface was changing.
+      // Under Skia, toImage still completes with an Image, but nothing backs
+      // it, and toByteData on it dereferences null on the IO thread: a native
+      // SIGSEGV in flutter::EncodeImage that no Dart try/catch can stop. A
+      // real capture is never 0x0 (the engine rejects that size up front).
+      if (rawImage.width == 0 || rawImage.height == 0) {
+        rawImage.dispose();
+        return const CaptureFailure(
+          CaptureError.renderBoundaryNotFound,
+          'Raster snapshot produced an empty image',
+        );
+      }
+
       final ui.Image maskedImage = rawImage;
 
       // Compress image
