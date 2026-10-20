@@ -22,21 +22,23 @@ class RRWebEvent {
   };
 
   /// Create RRWeb event from SessionReplayEvent (accepts both base and persisted types)
-  factory RRWebEvent.fromSessionReplayEvent(SessionReplayEvent event) {
-    if (event.payload is MetadataPayload) {
-      final metadata = event.payload as MetadataPayload;
-      return _buildMetaEvent(metadata, event.timestamp);
-    } else if (event.payload is ScreenshotPayload) {
-      final screenshot = event.payload as ScreenshotPayload;
-      return _buildFullSnapshotEvent(screenshot, event.timestamp);
-    } else if (event.payload is InteractionPayload) {
-      final interaction = event.payload as InteractionPayload;
-      return _buildInteractionEvent(interaction, event.timestamp);
+  factory RRWebEvent.fromSessionReplayEvent(SessionReplayEvent event) =>
+      RRWebEvent.fromPayload(event.payload, event.timestamp);
+
+  /// Create RRWeb event from an event's payload and capture time
+  ///
+  /// The upload path calls this on a worker isolate, which is sent the
+  /// payloads and timestamps of a batch rather than its [SessionReplayEvent]s.
+  factory RRWebEvent.fromPayload(EventPayload payload, DateTime timestamp) {
+    if (payload is MetadataPayload) {
+      return _buildMetaEvent(payload, timestamp);
+    } else if (payload is ScreenshotPayload) {
+      return _buildFullSnapshotEvent(payload, timestamp);
+    } else if (payload is InteractionPayload) {
+      return _buildInteractionEvent(payload, timestamp);
     }
 
-    throw UnsupportedError(
-      'Unsupported payload type: ${event.payload.runtimeType}',
-    );
+    throw UnsupportedError('Unsupported payload type: ${payload.runtimeType}');
   }
 
   /// Build rrweb Meta event with screen dimensions

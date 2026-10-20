@@ -6,6 +6,7 @@ import 'package:clock/clock.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mixpanel_flutter_session_replay/src/internal/upload/payload_serializer.dart';
+import 'package:mixpanel_flutter_session_replay/src/internal/upload/rrweb_event.dart';
 import 'package:mixpanel_flutter_session_replay/src/models/session.dart';
 import 'package:mixpanel_flutter_session_replay/src/models/session_event.dart';
 import 'package:mixpanel_flutter_session_replay/src/models/rrweb_types.dart';
@@ -266,6 +267,110 @@ void main() {
       });
     });
 
+    group('payload format', () {
+      // test/golden/rrweb_payload.json was recorded from the serializer before
+      // the rrweb conversion moved to the worker isolate. Every byte of it is
+      // what the Mixpanel replay API has always been sent, so any difference
+      // is a format change.
+      final expectedJson = File(
+        'test/golden/rrweb_payload.json',
+      ).readAsStringSync();
+      final session = Session(
+        id: 'session-1',
+        startTime: DateTime.fromMillisecondsSinceEpoch(1000, isUtc: true),
+        status: SessionStatus.active,
+      );
+
+      test('worker isolate output matches the recorded payload', () async {
+        // GIVEN
+        final events = _goldenEvents();
+
+        // WHEN
+        final result = await serializer.serialize(events, session, 'user-1', 0);
+
+        // THEN
+        final body = result.body as List<int>;
+        expect(utf8.decode(gzip.decode(body)), expectedJson);
+        expect(body, gzip.encode(utf8.encode(expectedJson)));
+      });
+
+      test('inline output matches the recorded payload', () async {
+        // GIVEN
+        final inlineSerializer = PayloadSerializer(
+          testToken,
+          compressInIsolate: false,
+        );
+        final events = _goldenEvents();
+
+        // WHEN
+        final result = await inlineSerializer.serialize(
+          events,
+          session,
+          'user-1',
+          0,
+        );
+
+        // THEN
+        final body = result.body as List<int>;
+        expect(utf8.decode(gzip.decode(body)), expectedJson);
+        expect(body, gzip.encode(utf8.encode(expectedJson)));
+      });
+
+      test(
+        'matches per-event rrweb conversion for a full stored batch',
+        () async {
+          // GIVEN
+          // Rows as SqliteEventQueue returns them: every screenshot a view into
+          // one shared buffer, at frame sizes a phone produces.
+          final events = _storedBatch(
+            screenshotCount: 40,
+            screenshotBytes: 60000,
+          );
+          final expectedBody = gzip.encode(
+            utf8.encode(
+              jsonEncode(
+                events
+                    .map((e) => RRWebEvent.fromSessionReplayEvent(e).toJson())
+                    .toList(),
+              ),
+            ),
+          );
+
+          // WHEN
+          final result = await serializer.serialize(
+            events,
+            session,
+            'user-1',
+            0,
+          );
+
+          // THEN
+          expect(result.body, expectedBody);
+        },
+      );
+
+      test('leaves the events\' screenshot bytes intact', () async {
+        // GIVEN
+        final events = _storedBatch(screenshotCount: 3, screenshotBytes: 1000);
+        final expectedImages = [
+          for (final e in events)
+            if (e.payload is ScreenshotPayload)
+              Uint8List.fromList((e.payload as ScreenshotPayload).imageData),
+        ];
+
+        // WHEN
+        await serializer.serialize(events, session, 'user-1', 0);
+
+        // THEN
+        final actualImages = [
+          for (final e in events)
+            if (e.payload is ScreenshotPayload)
+              (e.payload as ScreenshotPayload).imageData,
+        ];
+        expect(actualImages, expectedImages);
+      });
+    });
+
     group('buildAuthHeader', () {
       test('creates correct Basic auth header', () {
         // GIVEN
@@ -344,4 +449,119 @@ void main() {
       });
     });
   });
+}
+
+/// The batch test/golden/rrweb_payload.json was recorded from.
+///
+/// Covers each event type, PNG and JPEG detection (including a 4-byte PNG
+/// signature, which is too short to count as PNG), every base64 padding
+/// length, an empty screenshot, coordinates that truncate toward zero, and
+/// screenshots that are views at an offset into a larger buffer, as stored
+/// rows are.
+List<SessionReplayEvent> _goldenEvents() {
+  final buffer = Uint8List.fromList([
+    0x00, 0x00, 0x00, // so every view starts mid-buffer
+    0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, // JPEG
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, //
+    0x89, 0x50, 0x4E, 0x47, // PNG signature alone: too short, so JPEG
+    0x7F,
+  ]);
+  Uint8List view(int offset, int length) =>
+      buffer.buffer.asUint8List(buffer.offsetInBytes + offset, length);
+  SessionReplayEvent event(int ms, EventType type, EventPayload payload) =>
+      SessionReplayEvent(
+        sessionId: 'session-1',
+        distinctId: 'user-1',
+        timestamp: DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true),
+        type: type,
+        payload: payload,
+      );
+  return [
+    event(1000, EventType.metadata, MetadataPayload(width: 375, height: 812)),
+    event(
+      1001,
+      EventType.screenshot,
+      ScreenshotPayload(imageData: view(3, 11)),
+    ),
+    event(
+      1250,
+      EventType.interaction,
+      InteractionPayload(interactionType: 7, x: 150.7, y: 300.2),
+    ),
+    event(
+      1251,
+      EventType.interaction,
+      InteractionPayload(interactionType: 9, x: -0.4, y: 811.999),
+    ),
+    event(
+      1500,
+      EventType.screenshot,
+      ScreenshotPayload(imageData: view(14, 12)),
+    ),
+    event(
+      2000,
+      EventType.screenshot,
+      ScreenshotPayload(imageData: view(26, 4)),
+    ),
+    event(
+      2500,
+      EventType.screenshot,
+      ScreenshotPayload(imageData: view(30, 1)),
+    ),
+    event(2501, EventType.metadata, MetadataPayload(width: 812, height: 375)),
+    event(
+      3000,
+      EventType.screenshot,
+      ScreenshotPayload(imageData: Uint8List(0)),
+    ),
+  ];
+}
+
+/// A batch as SqliteEventQueue returns it: a metadata row, then
+/// [screenshotCount] screenshots of [screenshotBytes] each, every one
+/// followed by a touch, with all screenshot bytes views into one buffer.
+List<PersistedSessionReplayEvent> _storedBatch({
+  required int screenshotCount,
+  required int screenshotBytes,
+}) {
+  final buffer = Uint8List(screenshotCount * screenshotBytes);
+  for (var i = 0; i < buffer.length; i++) {
+    buffer[i] = (i * 31 + i ~/ 7) & 0xFF;
+  }
+  var id = 0;
+  Map<String, Object?> row(int type, String metadata, Uint8List? binary) => {
+    'id': ++id,
+    'data_size': metadata.length + (binary?.length ?? 0),
+    'session_id': 'session-1',
+    'distinct_id': 'user-1',
+    'timestamp': 1000 + id * 250,
+    'type': type,
+    'payload_metadata': metadata,
+    'payload_binary': binary,
+  };
+  return [
+    PersistedSessionReplayEvent.fromDbRow(
+      row(
+        EventType.metadata.index,
+        '{"width":360,"height":640,"version":1}',
+        null,
+      ),
+    ),
+    for (var i = 0; i < screenshotCount; i++) ...[
+      PersistedSessionReplayEvent.fromDbRow(
+        row(
+          EventType.screenshot.index,
+          '{"version":1}',
+          buffer.buffer.asUint8List(i * screenshotBytes, screenshotBytes),
+        ),
+      ),
+      PersistedSessionReplayEvent.fromDbRow(
+        row(
+          EventType.interaction.index,
+          '{"type":7,"x":${i * 3.5},"y":${i * 7.25},"version":1}',
+          null,
+        ),
+      ),
+    ],
+  ];
 }
