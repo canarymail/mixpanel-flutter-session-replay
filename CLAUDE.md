@@ -114,7 +114,7 @@ These concerns have been reviewed and resolved. Do not re-raise them in code rev
 
 10. **Non-atomic batch removal** — Queue is cleared via `removeAll()` during SDK initialization. Leftover events from crashes are wiped before re-upload.
 
-11. **No image dimension validation** — Dimensions come from `RenderRepaintBoundary.toImage()` (hardware-bounded). Wrapped in try-catch in isolate.
+11. **No image dimension validation** — Dimensions come from `RenderRepaintBoundary.toImage()` (hardware-bounded). Wrapped in try-catch in isolate. The one exception is a 0x0 image: under Skia that is a failed raster snapshot with nothing behind it, and `toByteData` on it crashes natively, so `capture()` rejects it before encoding.
 
 12. **Silent failures in EventRecorder** — Graceful degradation pattern. Session replay SDK should never crash the host app.
 
