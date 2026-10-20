@@ -57,6 +57,9 @@ enum CaptureError {
   /// No RepaintBoundary available
   renderBoundaryNotFound,
 
+  /// The raster snapshot came back empty (0x0), so there is nothing to encode
+  emptySnapshot,
+
   /// OOM during capture
   insufficientMemory,
 

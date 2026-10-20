@@ -67,7 +67,7 @@ void main() {
       expect(result, isA<CaptureFailure>());
       expect(
         (result as CaptureFailure).error,
-        CaptureError.renderBoundaryNotFound,
+        CaptureError.emptySnapshot,
       );
       expect(image.disposed, isTrue);
     });
