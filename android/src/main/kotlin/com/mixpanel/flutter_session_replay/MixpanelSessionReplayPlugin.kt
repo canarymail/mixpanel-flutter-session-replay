@@ -8,14 +8,17 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
+import io.flutter.plugin.common.StandardMethodCodec
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class MixpanelSessionReplayPlugin : FlutterPlugin, MethodCallHandler {
     private lateinit var channel: MethodChannel
-    private var executor: ExecutorService? = null
-    private var applicationContext: Context? = null
+
+    // Set on the main thread, read by onMethodCall on the channel's task queue
+    @Volatile private var executor: ExecutorService? = null
+    @Volatile private var applicationContext: Context? = null
 
     // Cached resources reused across captures — only accessed from the single executor thread
     private var cachedBitmap: Bitmap? = null
@@ -28,10 +31,21 @@ class MixpanelSessionReplayPlugin : FlutterPlugin, MethodCallHandler {
     }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        channel = MethodChannel(binding.binaryMessenger, "com.mixpanel.flutter_session_replay")
-        channel.setMethodCallHandler(this)
         executor = Executors.newSingleThreadExecutor()
         applicationContext = binding.applicationContext
+
+        // Decode and handle calls on a background task queue, not the main thread.
+        // Since Flutter 3.29 the Dart UI isolate runs on the main thread too, and
+        // every compressImage call carries a full-screen RGBA frame (~1 MB), so
+        // decoding it there holds up the app's frames and input. The queue is
+        // serial, so calls are still handled in the order Dart sent them.
+        channel = MethodChannel(
+            binding.binaryMessenger,
+            "com.mixpanel.flutter_session_replay",
+            StandardMethodCodec.INSTANCE,
+            binding.binaryMessenger.makeBackgroundTaskQueue()
+        )
+        channel.setMethodCallHandler(this)
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
