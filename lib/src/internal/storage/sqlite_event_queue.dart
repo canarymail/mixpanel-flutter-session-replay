@@ -388,11 +388,30 @@ class SqliteEventQueue implements EventQueue {
   }
 
   /// Get default storage directory
+  ///
+  /// Application Support, not Documents: the iOS Files app lists Documents
+  /// when the host app turns on file sharing.
   Future<Directory> _getDefaultStorageDirectory() async {
-    final appDocDir = await getApplicationDocumentsDirectory();
-    final dir = Directory('${appDocDir.path}/mixpanel_replay');
+    await _removeLegacyDocumentsStorage();
+    final supportDir = await getApplicationSupportDirectory();
+    final dir = Directory('${supportDir.path}/mixpanel_replay');
     await dir.create(recursive: true);
     return dir;
+  }
+
+  /// Removes the folder older builds kept in Documents. Its events are
+  /// wiped on launch anyway, so nothing is lost.
+  Future<void> _removeLegacyDocumentsStorage() async {
+    try {
+      final appDocDir = await getApplicationDocumentsDirectory();
+      final legacyDir = Directory('${appDocDir.path}/mixpanel_replay');
+      if (await legacyDir.exists()) {
+        await legacyDir.delete(recursive: true);
+        _logger.debug('Removed legacy storage in Documents');
+      }
+    } catch (e) {
+      _logger.warning('Failed to remove legacy storage in Documents: $e');
+    }
   }
 
   /// Sanitize token for use in filename
